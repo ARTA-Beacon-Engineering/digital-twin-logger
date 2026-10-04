@@ -34,7 +34,7 @@ export function armLevels(encY) {
 export const sensorBottom = yb => yb - ARM.pipeR - PLATE_T - 0.048 - SENSOR.hornL;
 
 // Klem 2 bagian di tiang (lokal: setengah depan +Z, kuping ±X, baut sepanjang Z). earLx = panjang kuping +X.
-function poleClamp(ro, earLx, extraHoleX) {
+function poleClamp(ro, earLx, extraHoleX, earLn = CL.earL, extraHoleN = null) {
   const { w, t } = CL, uNut = new THREE.CylinderGeometry(0.0098, 0.0098, 0.008, 6);
   const half = front => {
     const sh = new THREE.Shape();
@@ -48,9 +48,9 @@ function poleClamp(ro, earLx, extraHoleX) {
   C.front.add(mesh(half(true), MAT.paint(), 'awlrClamp'));
   C.strap.add(mesh(half(false), MAT.paint(), 'awlrClamp'));
   for (const sx of [-1, 1]) {
-    const L = sx > 0 ? earLx : CL.earL, exC = sx * (ro + L / 2), bx = sx * (ro + t + CL.earL * 0.45);
-    const holes = [[bx - exC, 0, 0.0055]];
-    if (sx > 0) holes.push([extraHoleX - exC, 0, 0.0055]);
+    const L = sx > 0 ? earLx : earLn, exC = sx * (ro + L / 2), bx = sx * (ro + t + CL.earL * 0.45);
+    const holes = [[bx - exC, 0, 0.0055]], extra = sx > 0 ? extraHoleX : extraHoleN;
+    if (extra !== null) holes.push([extra - exC, 0, 0.0055]);
     const ear = holedPlateXY(L, w, t, holes);
     for (const [grp, z] of [[C.front, t / 2], [C.strap, -t / 2]]) { const m = mesh(ear, MAT.paint(), 'awlrClamp'); m.position.set(exC, 0, z); grp.add(m); }
     const hd = mesh(uNut, MAT.nut(), 'awlrClamp'); hd.rotation.x = Math.PI / 2; hd.position.set(bx, 0, -t - 0.004);
@@ -70,6 +70,7 @@ function pipe(len, axis, r = ARM.pipeR, wall = ARM.pipeWall) {
 
 // opts (dipakai juga EWS Banjir & AFMR): level() = muka air di stasiun ini (m dari normal, env.js), river = { xc, width, part, label }
 // = sumbu & lebar alur di depan stasiun untuk label / dimensi sungai (bawaan: penampang RIVER di stasiun AWLR),
+// backstay = { x } → sling penahan tiang dari kuping kiri klem sling ke angkur tanah di x lokal (sisi berlawanan lengan);
 // sensor: false = lengan & dudukan saja, tanpa sensor radar, kabel sensor & dimensi ke muka air (sensor lain dipasang
 // pemanggil memakai U.mount); plate: false = tanpa plat dudukan di ujung pipa bawah; caps: true = ujung luar pipa lengan ditutup;
 // arm = { top, bottom, posts } mengganti panjang rangka lengan (bawaan ARM)
@@ -126,7 +127,7 @@ function extend(model, opts = {}) {
 
   // ---------- Klem sling di tiang + sling Ø6 ----------
   const earLx = 0.06, slingHoleX = ro + earLx - 0.012;
-  const SC = poleClamp(ro, earLx, slingHoleX);
+  const SC = opts.backstay ? poleClamp(ro, earLx, slingHoleX, earLx, -slingHoleX) : poleClamp(ro, earLx, slingHoleX);
   for (const k of ['front', 'strap', 'bolts', 'nuts']) { SC[k].position.y = ySC; root.add(SC[k]); }
   Object.assign(U, { scFront: SC.front, scStrap: SC.strap, scBolts: SC.bolts, scNuts: SC.nuts });
   const sling = U.sling = newG();
@@ -176,46 +177,67 @@ function extend(model, opts = {}) {
     return g;
   }
 
-  // Titik-titik: shackle atas (kuping klem) → spanskrup → thimble + sling → thimble → shackle bawah (lug)
+  // Rangkaian sling dari pinA (atas, spanskrup) ke pinB (bawah) — dipakai sling lengan & sling penahan tiang
+  function slingRun(pinA, pinB, grp, part = 'awlrSling') {
+    // Titik-titik: shackle atas (kuping klem) → spanskrup → thimble + sling → thimble → shackle bawah (lug)
+    const u = pinB.clone().sub(pinA).normalize();
+    const shA = dShackle(pinA, u), shB = dShackle(pinB, u.clone().negate());
+    // Spanskrup (turnbuckle) M10 di ujung atas: mata – ulir kanan – mur kontra – badan terbuka – mur kontra – ulir kiri – mata.
+    // Sumbu lokal +Y = arah sling. Panjang mata ke mata ± 250 mm (perkiraan).
+    const TB = { eyeR: 0.012, eyeT: 0.003, rodR: 0.005, bossAF: 0.019, bossL: 0.018, body: 0.11, rod: 0.05 };
+    const pA = shA.tip.clone().addScaledVector(u, -0.006);                 // busur shackle masuk ke mata atas
+    const tb = frame(pA, u, Zw);
+    const eye = new THREE.TorusGeometry(TB.eyeR, TB.eyeT, 8, 24);   // mata di bidang tegak (XY lokal), mengait busur shackle yang mendatar
+    const yB0 = 2 * TB.eyeR - TB.eyeT + TB.rod, yB1 = yB0 + TB.body, tbLen = yB1 + TB.rod + 2 * TB.eyeR - TB.eyeT;
+    const along = (m, y) => at(m, 0, y, 0);
+    const n0 = 2 * TB.eyeR - TB.eyeT, n1 = tbLen - 2 * TB.eyeR + TB.eyeT;
+    tb.add(
+      along(mesh(eye, galv, 'awlrTurnbuckle'), TB.eyeR),
+      along(mesh(new THREE.CylinderGeometry(0.0062, TB.rodR, 0.008, 16), galv, 'awlrTurnbuckle'), n0 + 0.004),   // leher mata
+      along(threaded(yB0 + TB.bossL - n0 - 0.008, TB.rodR, 'awlrTurnbuckle'), (n0 + 0.008 + yB0 + TB.bossL) / 2),
+      along(mesh(hex(0.017, 0.008), MAT.nut(), 'awlrTurnbuckle'), yB0 - 0.0045),   // mur kontra
+      along(mesh(hex(TB.bossAF, TB.bossL), galv, 'awlrTurnbuckle'), yB0 + TB.bossL / 2),
+      along(mesh(hex(TB.bossAF, TB.bossL), galv, 'awlrTurnbuckle'), yB1 - TB.bossL / 2),
+      along(mesh(hex(0.017, 0.008), MAT.nut(), 'awlrTurnbuckle'), yB1 + 0.0045),   // mur kontra
+      along(threaded(n1 - 0.008 - (yB1 - TB.bossL), TB.rodR, 'awlrTurnbuckle'), (yB1 - TB.bossL + n1 - 0.008) / 2),
+      along(mesh(new THREE.CylinderGeometry(TB.rodR, 0.0062, 0.008, 16), galv, 'awlrTurnbuckle'), n1 - 0.004),
+      along(mesh(eye, galv, 'awlrTurnbuckle'), tbLen - TB.eyeR),
+    );
+    for (const x of [-1, 1])                                               // rangka badan: 2 plat samping
+      tb.add(at(mesh(new THREE.BoxGeometry(0.004, TB.body - 2 * TB.bossL + 0.004, 0.012), galv, 'awlrTurnbuckle'), x * (TB.bossAF / 2 - 0.001), (yB0 + yB1) / 2, 0));
+    // Thimble atas masuk ke mata bawah spanskrup (thimble mendatar), thimble bawah masuk busur shackle lug (thimble tegak)
+    const tA = pA.clone().addScaledVector(u, tbLen - TB.eyeR + 0.013), tB = shB.tip.clone().addScaledVector(u, -0.0065);
+    const perpV = V3(-u.y, u.x, 0);
+    grp.add(
+      shA.g, shB.g, tb,
+      ropeEnd(tA, u, Zw),                                                                                        // thimble & ekor mendatar
+      ropeEnd(tB, u.clone().negate(), perpV.clone().negate()),                                                    // thimble tegak, ekor ke bawah
+      rodBetween(tA.clone().addScaledVector(u, 0.011).toArray(), tB.clone().addScaledVector(u, -0.011).toArray(), ARM.slingR, galv, part, 8),
+    );
+    return { u, pA, tbLen };
+  }
   const pinA = V3(slingHoleX, ySC, 0), pinB = V3(xl, yLug + 0.004, 0);
-  const u = pinB.clone().sub(pinA).normalize();
-  const shA = dShackle(pinA, u), shB = dShackle(pinB, u.clone().negate());
-  // Spanskrup (turnbuckle) M10 di ujung atas: mata – ulir kanan – mur kontra – badan terbuka – mur kontra – ulir kiri – mata.
-  // Sumbu lokal +Y = arah sling. Panjang mata ke mata ± 250 mm (perkiraan).
-  const TB = { eyeR: 0.012, eyeT: 0.003, rodR: 0.005, bossAF: 0.019, bossL: 0.018, body: 0.11, rod: 0.05 };
-  const pA = shA.tip.clone().addScaledVector(u, -0.006);                 // busur shackle masuk ke mata atas
-  const tb = frame(pA, u, Zw);
-  const eye = new THREE.TorusGeometry(TB.eyeR, TB.eyeT, 8, 24);   // mata di bidang tegak (XY lokal), mengait busur shackle yang mendatar
-  const yB0 = 2 * TB.eyeR - TB.eyeT + TB.rod, yB1 = yB0 + TB.body, tbLen = yB1 + TB.rod + 2 * TB.eyeR - TB.eyeT;
-  const along = (m, y) => at(m, 0, y, 0);
-  const n0 = 2 * TB.eyeR - TB.eyeT, n1 = tbLen - 2 * TB.eyeR + TB.eyeT;
-  tb.add(
-    along(mesh(eye, galv, 'awlrTurnbuckle'), TB.eyeR),
-    along(mesh(new THREE.CylinderGeometry(0.0062, TB.rodR, 0.008, 16), galv, 'awlrTurnbuckle'), n0 + 0.004),   // leher mata
-    along(threaded(yB0 + TB.bossL - n0 - 0.008, TB.rodR, 'awlrTurnbuckle'), (n0 + 0.008 + yB0 + TB.bossL) / 2),
-    along(mesh(hex(0.017, 0.008), MAT.nut(), 'awlrTurnbuckle'), yB0 - 0.0045),   // mur kontra
-    along(mesh(hex(TB.bossAF, TB.bossL), galv, 'awlrTurnbuckle'), yB0 + TB.bossL / 2),
-    along(mesh(hex(TB.bossAF, TB.bossL), galv, 'awlrTurnbuckle'), yB1 - TB.bossL / 2),
-    along(mesh(hex(0.017, 0.008), MAT.nut(), 'awlrTurnbuckle'), yB1 + 0.0045),   // mur kontra
-    along(threaded(n1 - 0.008 - (yB1 - TB.bossL), TB.rodR, 'awlrTurnbuckle'), (yB1 - TB.bossL + n1 - 0.008) / 2),
-    along(mesh(new THREE.CylinderGeometry(TB.rodR, 0.0062, 0.008, 16), galv, 'awlrTurnbuckle'), n1 - 0.004),
-    along(mesh(eye, galv, 'awlrTurnbuckle'), tbLen - TB.eyeR),
-  );
-  for (const x of [-1, 1])                                               // rangka badan: 2 plat samping
-    tb.add(at(mesh(new THREE.BoxGeometry(0.004, TB.body - 2 * TB.bossL + 0.004, 0.012), galv, 'awlrTurnbuckle'), x * (TB.bossAF / 2 - 0.001), (yB0 + yB1) / 2, 0));
-  // Thimble atas masuk ke mata bawah spanskrup (thimble mendatar), thimble bawah masuk busur shackle lug (thimble tegak)
-  const tA = pA.clone().addScaledVector(u, tbLen - TB.eyeR + 0.013), tB = shB.tip.clone().addScaledVector(u, -0.0065);
-  const perpV = V3(-u.y, u.x, 0);
-  sling.add(
-    shA.g, shB.g, tb,
-    ropeEnd(tA, u, Zw),                                                                                        // thimble & ekor mendatar
-    ropeEnd(tB, u.clone().negate(), perpV.clone().negate()),                                                    // thimble tegak, ekor ke bawah
-    rodBetween(tA.clone().addScaledVector(u, 0.011).toArray(), tB.clone().addScaledVector(u, -0.011).toArray(), ARM.slingR, galv, 'awlrSling', 8),
-  );
+  const { u, pA, tbLen } = slingRun(pinA, pinB, sling);
   const tbTag = tag('Spanskrup', 'awlrTurnbuckle', { maxDist: 3 });
   tbTag.position.copy(pA.clone().addScaledVector(u, tbLen / 2)).add(V3(0, 0.025, 0)); sling.add(tbTag);
   const slTag = tag('Sling Ø6 mm', 'awlrSling', { maxDist: 8 });
   slTag.position.copy(pinA.clone().lerp(pinB, 0.5)).add(V3(0, 0.02, 0)); sling.add(slTag);
+
+  // ---------- Sling penahan tiang (backstay): kuping kiri klem sling → angkur tanah di sisi berlawanan lengan ----------
+  // Angkur = blok beton tertanam + batang angkur Ø16 miring searah sling, mata di ujung. Ukuran = perkiraan.
+  if (opts.backstay) {
+    const AN = { block: 0.5, above: 0.05, rodR: 0.008, rodOut: 0.36, eyeR: 0.028 };
+    const pinC = V3(-slingHoleX, ySC, 0), P0 = V3(opts.backstay.x, AN.above, 0), up = pinC.clone().sub(P0).normalize();
+    const E = P0.clone().addScaledVector(up, AN.rodOut + AN.eyeR);              // pusat mata angkur (pin shackle lewat sini)
+    const anchor = U.anchor = newG();
+    anchor.add(at(mesh(new THREE.BoxGeometry(AN.block, AN.block, AN.block), MAT.concrete(), 'awlrAnchor'), P0.x, AN.above - AN.block / 2, 0));
+    anchor.add(rodBetween(P0.clone().addScaledVector(up, -0.35).toArray(), P0.clone().addScaledVector(up, AN.rodOut).toArray(), AN.rodR, galv, 'awlrAnchor', 12));
+    anchor.add(at(mesh(new THREE.TorusGeometry(AN.eyeR, AN.rodR, 10, 28), galv, 'awlrAnchor'), E.x, E.y, 0));
+    const anTag = tag('Angkur tanah (blok beton)', 'awlrAnchor', { maxDist: 8 }); anTag.position.set(P0.x + AN.block / 2, AN.above, AN.block / 2); anchor.add(anTag);
+    const stay = U.stay = newG();
+    slingRun(pinC, E.clone().addScaledVector(up, AN.eyeR - 0.004), stay, 'awlrStay');
+    const stTag = tag('Sling penahan tiang Ø6 mm', 'awlrStay', { maxDist: 10 }); stTag.position.copy(pinC.clone().lerp(E, 0.5)).add(V3(0, 0.02, 0)); stay.add(stTag);
+  }
 
   // ---------- Sensor radar: badan biru di atas dudukan, leher ulir lewat slot, mur kunci, horn kerucut ke bawah ----------
   if (opts.sensor !== false) {

@@ -251,7 +251,8 @@ function pick(ev) {
   const r = renderer.domElement.getBoundingClientRect();
   pointer.set(((ev.clientX - r.left) / r.width) * 2 - 1, -((ev.clientY - r.top) / r.height) * 2 + 1);
   raycaster.setFromCamera(pointer, camera);
-  const hits = raycaster.intersectObject(model, true).filter(h => h.object.isMesh && h.object.userData.part &&
+  const shown = o => { for (let q = o; q; q = q.parent) if (!q.visible) return false; return true; };   // abaikan bagian tersembunyi
+  const hits = raycaster.intersectObject(model, true).filter(h => h.object.isMesh && h.object.userData.part && shown(h.object) &&
     !(xray && (h.object.userData.part === 'foundation' || h.object.userData.part === 'grout')));
   return hits.length ? hits[0].object.userData.part : null;
 }
